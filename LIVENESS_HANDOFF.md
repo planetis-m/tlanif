@@ -1,277 +1,235 @@
-# Handoff: native Tlanif liveness checking for Relay
+# Implement native bounded liveness in Tlanif
 
-Start the agent in **`~/Projects/tlanif`**, on branch **`feature/native-liveness`**.
-This is the implementation repository; Relay supplies the models to validate.
+Start in `~/Projects/tlanif`, on branch `feature/native-liveness`. Implement,
+validate and locally commit the work. **Do not push.** The checkout contains
+the project setup and this handoff as a committed baseline.
 
-```sh
-cd ~/Projects/tlanif
-```
+Everything needed for this task is in this workspace or in this prompt.
+Implement and verify the model checker's feature itself. Applying the completed
+feature to another project's models is a separate task.
 
-Implement and validate native, bounded liveness checking in Tlanif, then use it
-to check Relay's existing HTTP and WebSocket models. Complete the work rather
-than returning only a design. Keep the implementation small and fast, and report
-the exact guarantees, assumptions, failures and limitations.
+Use Tlanif's existing Nim/NIF machinery and dependencies. Do not introduce Brian,
+Python, JSON graph interchange or a CLI-output parser. The user chose a native
+Tlanif extension and asked for a small, fast implementation. No liveness backend
+has been written yet; perform fresh validation rather than relying on earlier
+claims about an external checker.
 
-The user selected extending Tlanif instead of maintaining a separate checker in
-Relay, and then said to use whatever Tlanif already uses. Do not introduce Brian,
-Python, a JSON interchange pipeline, or a wrapper that parses CLI output. Use
-Tlanif's Nim/NIF machinery directly. A new JSON feature is not required.
+## Outcome
 
-## Read first
+Add an explicit opt-in mode for checking named progress predicates under named
+weak-fairness action assumptions. Keep all existing safety-only behavior and
+commands working. Produce reproducible pass/failure/incomplete results, and
+readable fair counterexamples consisting of a finite prefix and repeating walk.
 
-- `/home/ageralis/Projects/tlanif/README.md`
-- `/home/ageralis/Projects/tlanif/AGENTS.md`
-- `/home/ageralis/Projects/relay/AGENTS.md`
-- `/home/ageralis/Projects/relay/models/README.md`
-- `/home/ageralis/Projects/relay/models/REPORT.md`
-- All three Relay `.nif` files, especially their `Fair*` and `Goal*` definitions.
+Implement a bounded `[]<>Goal` contract first: on every admissible infinite
+behavior, the selected state predicate becomes true infinitely often. Equivalently,
+no fair behavior eventually keeps it false forever. This is not general temporal
+logic checking. Some supplied predicates encode response progress because pending
+state persists until resolution; describe that interpretation precisely.
 
-Follow each project's conventions. Tlanif's examples are its regression suite;
-it currently has no dedicated tests/CI framework. Relay tests are standalone
-Nim programs with `doAssert`, not `unittest`. Use Atlas if dependency setup is
-necessary; do not introduce Nimble installation instructions.
-
-## Starting point
-
-No liveness implementation has been written. The previous agent only read the
-sources and prepared a temporary source copy. That copy was removed when this
-handoff was requested. There is no backend, checker patch or partial result to
-recover from it. Earlier statements about a removed external checker are not
-current, reproducible validation evidence; perform fresh checks.
-
-Tlanif's current setup/documentation changes and this handoff are committed on
-`feature/native-liveness`, giving you a clean starting checkout. The user explicitly
-authorized committing that state. Work directly in Tlanif; do not spend time
-isolating earlier edits or preparing a separate checker in Relay. Start the agent
-with Tlanif as its working directory so its normal workspace permissions apply.
-
-Relay's latest relevant commit is `92a11ba`, following `f2cdf36` and `496e01d`.
-Its production HTTP and WebSocket source files were not changed by the modeling work.
-Commit completed work locally. **Never push.**
-
-## Required behavior
-
-Keep existing safety-only commands, exit meanings, invariant checking and
-counterexamples working. Liveness must be an explicit opt-in mode. Existing
-definitions named `Fair*` or `Goal*` currently have no special semantics; do not
-silently activate every such definition by name convention.
-
-Provide a documented way to select named state predicates as progress goals and
-named action expressions as weak-fairness assumptions. For example, CLI options
-such as `--live:GoalShutdown,GoalOperations` and
+A CLI such as `--live:GoalShutdown,GoalOperations` plus
 `--fair:FairWorker,FairNetwork,FairConsumer,FairOwner` would avoid new NIF tags.
-The option names are a suggestion, not a requirement. Reject unknown names,
-malformed choices and unsupported combinations clearly.
+These option names are suggestions. Make a reasonable implementation choice and
+document it; do not stop to ask for preferences. Selecting names must be explicit:
+the existing `Fair*` and `Goal*` definitions are ordinary definitions, and not all
+of them are required properties. Reject invalid names and unsupported combinations.
 
-State the exact temporal property. A useful initial contract is to check
-`[]<>Goal` for each selected predicate: under the selected weak fairness, a run
-cannot eventually keep the goal false forever. This is not general LTL/TLA+
-temporal checking. Some supplied goals encode response progress because their
-pending state persists until resolution; document that interpretation rather
-than claiming arbitrary per-request leads-to properties.
+An exhaustive finite check establishes the selected bounded model property under
+its stated assumptions. It does not prove production workers, libcurl, real-time
+bounds, unbounded workloads, OS scheduling or memory safety correct.
 
-Do not confuse any of these with a liveness proof:
+## Correctness requirements
 
-- A safety pass.
-- Existence of a path to a goal or reverse reachability from goal states.
-- A final broadcast invariant.
-- An acyclic or exhausted finite prefix without analysis of infinite behaviors.
-- Exploration that hit its state cap.
+1. Explore the full reachable graph using Tlanif semantics and continue checking
+   the model's safety invariant. Keep edges needed for cycle analysis, not only
+   the BFS discovery tree.
+2. Include implicit stuttering from `always-stutter` at every state. A state with
+   no enabled state-changing Next step can support an infinite stalled behavior.
+3. Implement weak fairness of nonstuttering actions, corresponding to
+   `WF_vars(A)` with `<A>_vars`. Returning the same full state does not count as
+   a state-changing occurrence or make that nonstuttering action enabled.
+4. An action group `or(A B ...)` is one fairness assumption for that disjunction.
+   Do not replace it with independent fairness for each action, binder instance,
+   operation or connection.
+5. Determine enabledness in the full state-space semantics, before restricting
+   to goal-false states. An action with only an escape edge to a goal-true state
+   is still enabled; forgetting it would incorrectly accept an unfair self-loop.
+6. For each goal, analyze SCCs in the reachable goal-false subgraph. A component
+   supports a weakly fair infinite walk if, for every selected fairness group,
+   it contains either a state disabling that nonstuttering action or an internal
+   edge belonging to it. Implicit stuttering also makes singleton components
+   candidates. Explain and test why the acceptance criterion is correct.
+7. Preserve overlapping action memberships and fairness labels when transitions
+   or successor states are deduplicated. Evaluate arbitrary selected action
+   expressions correctly; do not silently assume all actions are disjoint labels.
+8. Emit an actually fair closed walk. A fair SCC can contain individual simple
+   cycles that are unfair. The witness must visit the required disabling states
+   or include the required action edges, then return to its loop entry. Validate
+   every emitted transition and the fairness of the repeated walk.
+9. A state cap is incomplete/unknown, never a pass. Distinguish invalid input,
+   invariant failure, liveness failure and incomplete exploration. Report vacuous
+   goals with no reachable false states, and surface inconsistent fairness/no
+   admissible fair continuation rather than advertising vacuous progress assurance.
 
-A complete, finite model check under explicit assumptions establishes that
-bounded model property. It does not prove the Nim workers, libcurl, OS scheduling,
-unbounded workloads, ARC memory safety or wall-clock deadlines correct.
+Support weak fairness only initially. Do not implement strong fairness accidentally.
+Reject liveness with symmetry reduction until preservation of selected properties
+and action memberships is established. Do not claim shortest fair cycles if only
+the prefix is a shortest BFS path.
 
-## Semantics that must be correct
+## Existing implementation and speed
 
-1. Build the complete reachable transition graph using the existing evaluator.
-   Continue checking the selected safety invariant. Retain enough edges and
-   fairness information to analyze cycles, not only the BFS discovery tree.
-2. Account for the implicit stutter step in `always-stutter` at every state.
-   A state with no state-changing transitions can still have an infinite run;
-   pending work stuck there must not receive a liveness pass.
-3. Use weak fairness of **nonstuttering** actions, corresponding to
-   `WF_vars(A)` with `<A>_vars`. An action that produces only the same state does
-   not impose a state-changing fairness obligation. Compare full states exactly.
-4. An action group such as `FairWorker = or(...)` is one disjunctive fairness
-   assumption. It is not independent fairness for every constituent action or
-   every quantified connection. Preserve that distinction in results.
-5. Compute whether fairness actions are enabled from the **full state-space
-   semantics**, before restricting to a goal-false subgraph. An escape edge to a
-   goal-true state still makes its action enabled. Filtering it out must not
-   make an unfair stutter appear fair.
-6. For each goal, find strongly connected components in the subgraph of
-   reachable goal-false states. With implicit stuttering, singleton components
-   can support infinite behavior too. A component supports a weakly fair
-   infinite walk if, for every selected fairness group, it contains either a
-   state disabling that group's nonstuttering action or an internal transition
-   belonging to that group. Explain and test this criterion.
-7. Preserve overlapping fairness labels when different action groups can
-   describe the same transition. Deduplicating states or edges must not drop
-   action membership needed to establish fairness.
-8. Report actual fair counterexamples: a reachable finite prefix followed by a
-   repeatable closed walk that keeps the goal false and satisfies every selected
-   fairness assumption. A convenient simple cycle inside a fair SCC may itself
-   be unfair; include the required disabling states or action edges in the
-   emitted walk. Validate the emitted transitions and fairness witnesses.
-9. Distinguish counterexamples from incomplete exploration and invalid input.
-   A cap hit must produce an incomplete/unknown result, never a pass. Report
-   vacuous goals that have no reachable false states. Detect or clearly surface
-   inconsistent fairness assumptions/no admissible fair continuation so a
-   vacuous universal result is not presented as useful progress assurance.
-
-Initially support weak fairness only unless another temporal feature is actually
-necessary. Do not silently treat weak fairness as strong fairness. Do not use
-symmetry reduction for liveness until its preservation of the selected properties
-and action labels is established; rejecting the combination is acceptable.
-
-## Existing APIs and performance guidance
-
-The local toolchain is Nim 2.3.1, with NIF libraries at
-`/usr/lib64/nimony/src/lib`. The Tlanif build convention is:
+Nim 2.3.1 is available. `src/nim.cfg` supplies
+`/usr/lib64/nimony/src/lib` for NIF libraries. Build from this workspace:
 
 ```sh
 nim c -d:release -o:bin/tlanif src/tlanif.nim
 ```
 
-Relevant implementation surfaces:
+The source interfaces you can reuse are:
 
-- `loader.nim`: `loadModuleFile` and `loadModuleBuffer` return a `Module`.
-- `eval.nim`: module definitions have `Cursor` bodies; `initialStates`,
-  `successors`, `evalAction` and `checkInvariant` provide reference semantics.
+- `loader.nim`: `loadModuleFile`, `loadModuleBuffer`, and module definition bodies.
+- `eval.nim`: `initialStates`, `successors`, `evalAction`, `checkInvariant`.
 - `compile.nim`: `compileModule`, `loadState`, `checkInv`, `runNext`,
-  `encodeSuccessor` and `successorState` provide compiled evaluation.
-- The compiler internally has `CExpr`, `Cont`, `Ctx`, `Scope`, `compileExpr`
-  and `compileAction`. They are currently private. A narrow native API for
-  compiling/evaluating additional predicates and action expressions against a
-  loaded state would avoid recompiling modules or decoding that state repeatedly.
-- `pexplore.nim`: `encodeState` and `decodeState` are exported. Its private
-  per-variable `Interner`, `internState` and `unpackState` already reduce state
-  storage to packed integer tuples. Reuse or carefully extract that machinery
-  rather than inventing another parser or state representation.
-- `value.nim`: states/values use NIF cursor-backed storage. Never pass `Value`
-  cursors between threads. Existing parallel workers exchange encoded strings
-  and own their modules independently.
-- `loader.nim` keeps only the last `(check ...)`; multiple invariants must be
-  combined into one expression. Do not rely on multiple checks being enforced.
+  `encodeSuccessor`, `successorState`. Internal `CExpr`, `Cont`, `Ctx`, `Scope`,
+  `compileExpr` and `compileAction` are private. A narrow native API to compile
+  additional goals/actions against one loaded state can avoid repeated compilation
+  and state decoding.
+- `pexplore.nim`: exported `encodeState`/`decodeState`; private `Interner`,
+  `internState`/`unpackState` already provide exact per-variable interning and
+  packed state keys. Reuse or carefully extract them instead of duplicating a
+  parser or storing full printed states.
+- `value.nim`: values are cursor-backed. Never send `Value` cursors across threads.
+  Existing workers own separate modules and exchange encoded strings.
 
-Use compiled evaluation for the fast path, compact graph storage and an iterative
-SCC algorithm so a long graph cannot exhaust the call stack. Evaluate goals and
-enabledness while exploring; avoid rebuilding the graph for every goal. Encode
-or print full states only when needed for counterexamples. Measure real elapsed
-time and peak memory on Relay's models before making performance claims.
+Use compiled evaluation, compact graph storage and iterative SCC traversal.
+Evaluate goals and action enabledness while exploring. Reuse the graph for all
+selected goals. Format full states only for diagnostics. Measure elapsed time
+and peak memory on regression cases and a larger bounded stress case; do not
+guess performance numbers.
 
-Keep a reference-evaluator path for differential validation. The existing safety
-workflow requires no-`--jobs` reference exploration and `--jobs:4` compiled parallel
-exploration to agree. Establish equivalent differential checks for the new
-liveness mode. If the first liveness implementation uses a single compiled
-worker, document that honestly and reject incompatible `--jobs` choices rather
-than silently ignoring them. Do not sacrifice correctness for premature parallelism.
+Keep a reference-evaluator route for differential validation. Existing safety
+checks with no `--jobs` use reference semantics, while `--jobs:4` uses compiled
+parallel exploration. Establish equivalent agreement checks for liveness.
+An initial single-worker compiled liveness mode is acceptable if it is fast and
+correct; document it and reject incompatible parallel options rather than
+silently ignoring them. Do not rebuild the evaluator from scratch.
 
-## Regression validation
+## Modeling details
 
-Use small, readable examples or standalone assertions following Tlanif's project
-conventions. At minimum check:
+Use the project's existing NIF syntax. Comments attach to tokens as `#...#`,
+never as standalone lines. Module-level symbols have trailing dots; binder locals
+do not. Init primes every variable. Definitions are acyclic. Next omissions
+stutter. Keep complete stutter tuples. `case` is unsupported.
 
-- A progress action continuously enabled: without fairness, stuttering violates
-  progress; with its weak fairness, the goal passes.
-- Pending work with no enabled Next action: an implicit stutter counterexample.
-- A worker cycling forever while work stays pending: a real fair-cycle failure.
-- An action enabled only intermittently: weak fairness must still allow its
-  starvation; a strong-fairness interpretation would wrongly pass it.
-- A goal-false state with an enabled fairness edge leaving the bad SCC: rejecting
-  its unfair self-loop is essential.
-- Overlapping action groups and duplicate transitions: labels remain correct.
-- A fair closed walk requiring several disabling witnesses/action edges, whose
-  individual simple cycles are unfair: emitted counterexample is truly fair.
-- A no-op action: it cannot satisfy a required nonstuttering occurrence.
-- Unsatisfiable fairness, unreachable/vacuous goals, multiple initial states,
-  invalid selected definitions and state-cap exhaustion.
-- A deep graph demonstrating iterative SCC traversal.
+Only the last `(check ...)` currently takes effect. Combine required safety
+invariants into one check instead of adding unchecked forms. Preserve that
+existing behavior unless a deliberate, tested compatibility change is necessary.
 
-Check both evaluators where supported. Rerun the existing mutex and atomicArc
-examples, including their intentionally failing variants, in reference and
-parallel safety modes. No existing safety behavior should regress.
+## Concrete regression inputs
 
-## Relay checks to perform
+These complete specs can be added under `examples/` with suitable names. Add
+further small fixtures or standalone assertions for the cases listed afterwards.
 
-Run native liveness checks for these **required** goals with the relevant
-explicit fairness assumptions already annotated in the models:
+### Continuous progress versus unfair stutter
 
-| Model | Goals | Fairness definitions |
-| --- | --- | --- |
-| `websocket_lifecycle.nif` | `GoalShutdown`, `GoalCompletions`, `GoalEventWait`, `GoalResultWait` | `FairWorker`, `FairDue`, `FairResult`, `FairEvent`, `FairWaitClock`, as needed per goal |
-| `websocket_frames_close.nif` | `GoalClose`, `GoalSends` | `FairCancel`, `FairClose`, `FairClock`, `FairFinish`, `FairSendClock`, as needed per goal |
-| `http_lifecycle.nif` | `GoalShutdown`, `GoalOperations`, `GoalResultWait` | `FairWorker`, `FairNetwork`, `FairConsumer`, `FairOwner`, as needed per goal |
+```text
+(stmts
+  (variables :pc.0.)
+  (def :Init.0. (prime pc.0. 0))
+  (def :Progress.0. (and (eq pc.0. 0) (prime pc.0. 1)))
+  (def :Next.0. Progress.0.)
+  (def :Inv.0. (in pc.0. (range 0 1)))
+  (def :Goal.0. (eq pc.0. 1))
+  (def :FairProgress.0. Progress.0.)
+  (spec (always-stutter Init.0. Next.0. (tuple pc.0.)))
+  (check Inv.0.))
+```
 
-Use the minimum justified assumptions for each property. Worker shutdown must
-not depend on a consumer eventually draining WebSocket result/event queues.
-Completion consumption can legitimately require a willing result consumer;
-deadline-related progress requires advancing time. Do not add peer cooperation
-to bounded close merely to obtain a pass.
+Safety passes with two states. `[]<>Goal` fails without fairness because the
+initial state can stutter forever, and passes with `WF(FairProgress)`.
+This also tests that an escape edge remains enabled in a goal-false SCC.
 
-`GoalWaiters` in the WebSocket lifecycle model is **diagnostic**, not a required
-goal: an empty result waiter on a running client can legitimately wait forever
-when no future work arrives. It is useful as an expected-failure probe. Finite
-operation/connection horizons and global waiter predicates limit what these
-models establish; inspect the predicates before describing per-caller progress.
+### Pending deadlock
 
-HTTP owner abort is allowed to discard unfinished requests. Its `ownerAbort`
-ghost provenance and stage 9 encode that contract; `GoalOperations` includes the
-allowed discard. The existing `StrictCompletionInv` deliberately demands a
-stronger-than-contract publication policy and fails in eight states. This is
-not a supported-API defect or a reason to alter the production HTTP worker.
-Graceful close and unexpected worker failure still require publication before
-stopping. Keep at-most-once, accounting, resource and wakeup safety checks intact.
+```text
+(stmts
+  (variables :pending.0.)
+  (def :Init.0. (prime pending.0. (true)))
+  (def :Next.0. (false))
+  (def :Inv.0. (true))
+  (def :Goal.0. (not pending.0.))
+  (spec (always-stutter Init.0. Next.0. (tuple pending.0.)))
+  (check Inv.0.))
+```
 
-Current exhaustive safety counts, agreed by reference and compiled parallel
-evaluators with cap 400,000, are:
+Safety passes with one state. Liveness fails with a one-state stuttering loop.
 
-| Scenario | States |
-| --- | ---: |
-| WebSocket lifecycle default | 91,346 |
-| WebSocket frames/close | 58,180 |
-| WebSocket reuse | 213,205 |
-| WebSocket duplex | 166,938 |
-| HTTP one handle | 5,859 |
-| HTTP two handles | 7,803 |
+### Weak fairness permits intermittent starvation
 
-The README describes reuse/duplex reductions precisely. Reuse uses two fresh IDs,
-one retained slot and no waiter-entry actions. Duplex starts with two open
-connections, permits two fresh sends across either connection, and also removes
-message publication, close requests and event polling. Do not restrict each send
-to a preassigned connection. Do not claim liveness coverage for disabled waiter
-entry paths. An unrestricted larger WebSocket exploration previously exceeded
-400,000 states and remains incomplete. Keep state-cap outcomes explicit.
+```text
+(stmts
+  (variables :pc.0.)
+  (def :Init.0. (prime pc.0. 0))
+  (def :Toggle.0.
+    (and (lt pc.0. 2) (prime pc.0. (minus 1 pc.0.))))
+  (def :Progress.0. (and (eq pc.0. 1) (prime pc.0. 2)))
+  (def :Next.0. (or Toggle.0. Progress.0.))
+  (def :Inv.0. (in pc.0. (range 0 2)))
+  (def :Goal.0. (eq pc.0. 2))
+  (def :FairToggle.0. Toggle.0.)
+  (def :FairProgress.0. Progress.0.)
+  (spec (always-stutter Init.0. Next.0. (tuple pc.0.)))
+  (check Inv.0.))
+```
 
-Check the defaults first; then HTTP two handles and the documented reduced
-WebSocket variations if tractable. If a goal fails, inspect the fair counterexample
-and trace the corresponding production code. Distinguish a model bug, an
-insufficient or unreasonable fairness assumption, a finite-bound limitation and
-a real implementation defect. Do not weaken a property just to force a pass.
-Do not change production workers for insignificant internal differences.
+With weak fairness for both groups, liveness still fails: `0,1,0,1,...` takes
+Toggle repeatedly and disables Progress repeatedly. A strong-fairness
+interpretation would wrongly eliminate that witness.
 
-## Deliverables and cleanup
+### A fair walk whose simple cycles are unfair
 
-- Native Tlanif implementation, clear CLI help/documentation and regression examples.
-- Fresh model liveness results, with exact selected goals/fairness, complete state
-  and edge counts, elapsed time, and understandable fair counterexamples on failure.
-- Updated Relay `models/README.md` and `models/REPORT.md` describing the native
-  commands and current conclusions. Keep source/model/tool fingerprints current.
-  Existing safety-only limitations should be qualified accurately once the new
-  mode exists; do not leave stale claims that the tool can never check liveness.
-- Source comments inside `.nif` files must follow NIF suffix-token comment syntax.
-  Preserve acyclic definitions, module symbol trailing dots, unqualified bound
-  locals, complete Init assignments and explicit stutter variable lists.
-- All Relay modeling material belongs under `models/`. Checker implementation
-  belongs in Tlanif, not a new Relay script framework.
-- Remove temporary model variants, generated graph/JSON/log reports, temporary
-  source copies and binaries created for this task. Preserve unrelated existing
-  caches and user files. Use ordinary ignored build locations while testing.
-- No push. Final response should state changes, validation, findings, performance,
-  remaining limits and commit/working-tree state concisely.
+```text
+(stmts
+  (variables :pc.0.)
+  (def :Init.0. (prime pc.0. 0))
+  (def :A.0.
+    (and (lt pc.0. 3) (prime pc.0. (if (eq pc.0. 0) 1 3))))
+  (def :B.0.
+    (and (lt pc.0. 3) (prime pc.0. (if (eq pc.0. 0) 2 3))))
+  (def :Return.0.
+    (and (in pc.0. (set 1 2)) (prime pc.0. 0)))
+  (def :Next.0. (or A.0. B.0. Return.0.))
+  (def :Inv.0. (in pc.0. (range 0 3)))
+  (def :Goal.0. (eq pc.0. 3))
+  (def :FairA.0. A.0.)
+  (def :FairB.0. B.0.)
+  (spec (always-stutter Init.0. Next.0. (tuple pc.0.)))
+  (check Inv.0.))
+```
 
-The previous runtime validation passed all 14 Relay programs via
-`nim test tests/ci.nims`. Its loopback WebSocket protocol test also passed release,
-danger and ASan modes with linked libcurl 8.18.0. Those results do not substitute
-for the new checker's regression tests or machine-checked model liveness.
+Both A and B are continuously enabled in the bad component `{0,1,2}`, including
+at states where their edges leave it. The walk `0,1,0,2,0,...` satisfies both
+fairness groups and violates the goal. Either individual simple cycle is unfair.
+The emitted witness must satisfy both groups, not merely cite the whole SCC.
+
+Also cover a cycling worker with permanently pending work; overlapping groups
+and duplicate edges; no-op actions; unsatisfiable fairness; vacuous goals; multiple
+initial states; invalid selected definitions; cap exhaustion; and a deep graph
+that verifies iterative SCC traversal. Check each supported evaluator, including
+validation of emitted witnesses. Rerun existing mutex and atomicArc examples
+and their intentionally failing variants in reference and parallel safety modes.
+
+## Deliver and finish
+
+- Native implementation, CLI help and README usage/semantics.
+- Regression examples/assertions with documented commands and expected outcomes.
+- A concise validation record here: exact commands, expected and observed outcomes,
+  evaluator agreement, state/edge counts, benchmark timing and peak memory, and
+  remaining limits. Keep it specific to this feature's tests, not external projects.
+- Local commits on `feature/native-liveness`, clean final checkout, no push.
+- Remove your temporary variants, source copies, graph dumps and generated
+  reports/binaries after validation; preserve unrelated existing files/caches.
+
+Make routine implementation decisions autonomously. Only stop for a genuine
+blocking dependency or a permission that the environment requires. End with
+a concise account of changes, checks, findings, performance and remaining limits.
