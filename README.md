@@ -5,7 +5,7 @@ Parses a NIF dialect of untyped TLA-style specs (Symbol/SymbolDef names,
 operator tags) and checks safety invariants by BFS over finite models.
 
 Build:
-  nim c src/tla/tlanif.nim
+  nim c -o:bin/tlanif src/tlanif.nim
 
 Run:
   bin/tlanif examples/mutex.nif

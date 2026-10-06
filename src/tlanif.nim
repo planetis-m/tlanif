@@ -11,7 +11,7 @@ Usage:
   tlanif --max-states:N <spec.nif>
   tlanif --jobs:N <spec.nif>        # parallel BFS with N workers (0 = auto);
                                     # also uses interned state storage
-  tlanif --memo-limit:N <spec.nif>  # def-memo entry cap per module (0 = off)
+  tlanif --memo-limit:N <spec.nif>  # def-memo entry cap per module (0 = unbounded)
 
 See examples/.
 """
