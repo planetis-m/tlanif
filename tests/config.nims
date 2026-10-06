@@ -1,2 +1,2 @@
 switch("path", "$projectdir/../src")
-switch("path", "/usr/lib64/nimony/src/lib")
+switch("path", "$projectdir/../../nimony/src/lib")

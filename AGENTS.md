@@ -15,9 +15,9 @@ Build (verified; writes the binary where the README's run commands expect it):
 nim c -d:release -o:bin/tlanif src/tlanif.nim
 ```
 
-* `src/nim.cfg` adds `/usr/lib64/nimony/src/lib` to the search path, where `nifcore` and
-  `nifcoreparse` live (nimony is installed system-wide at `/usr/lib64/nimony`, version
-  0.6.3).
+* `src/nim.cfg` adds `../../nimony/src/lib` to the search path, where `nifcore` and
+  `nifcoreparse` live. This expects a sibling `nimony` checkout, matching upstream.
+  For a different local installation, supply its library path via Nim's `--path` option.
 * Nim 2.3.1, `--mm:orc`, threads on. `-d:release` matters: the debug default (`opt: none`)
   makes the interpreters several times slower. Note the `examples/atomicarc*.nif` specs
   *model* Nim's `--mm:atomicArc`; tlanif itself is not built with it.

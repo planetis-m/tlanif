@@ -97,8 +97,8 @@ nim c -d:release -o:bin/tliveness -r tests/tliveness.nim
 The suite compares compiled/reference evaluation, searches fair closed walks with
 an independent oracle on 120 small models, validates and corrupt-tests witnesses,
 checks deep and bounded stress graphs, and compares the existing safety examples
-with four-worker exploration. The [validation record](LIVENESS_HANDOFF.md#validation-record)
-contains commands, expected and observed outcomes, graph counts and benchmarks.
+with four-worker exploration. [tests/tliveness.nim](tests/tliveness.nim) contains
+the regression cases and expected outcomes.
 
 Liveness defaults to a single compiled worker. Use `--live-eval:reference` for
 differential verification:
@@ -113,7 +113,9 @@ fairness groups. Actions use the existing evaluator's omitted-variable stutterin
 and match transitions by exact full state, retaining overlapping memberships.
 Enabledness includes escape edges before goal-false SCC analysis. Every emitted
 walk is reference-validated; only the BFS prefix to its chosen entry is shortest.
-The SCC acceptance argument is in the validation record.
+Strong connectivity joins each group's disabling state or internal action edge
+into a fair closed walk; any fair infinite behavior must supply those witnesses
+among its recurring states and edges.
 
 | Exit | Liveness result |
 |---:|---|
