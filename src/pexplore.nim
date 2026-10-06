@@ -15,8 +15,10 @@
 ## synchrony preserves BFS order, so counterexamples are still
 ## shortest-path and `parent` reconstruction is unchanged.
 
-import std / [tables, sets, locks, syncio, strutils]
-import nifcore, value, eval, loader, explore, compile
+import std / [tables, sets, locks, syncio]
+import nifcore, eval, loader, explore, compile, statecodec
+when defined(countApply): import value
+export statecodec
 
 type
   Item = object
@@ -40,57 +42,6 @@ type
     chunks: seq[Chunk]
 
   WorkerArg = tuple[pool: ptr WorkerPool, idx: int]
-
-  Interner = object
-    ## Per-variable value interning (main thread only). The number of
-    ## distinct values one variable takes is tiny compared to the number of
-    ## states (states are the cross product, variables are its factors), so
-    ## visited/order shrink from one byte string per state to one packed
-    ## 4-byte index per variable — exact, no fingerprinting.
-    idx: Table[string, int32]   ## encoded value bytes → dense index
-    encs: seq[string]           ## dense index → encoded value bytes
-
-proc encodeState*(m: Module; st: State): string =
-  result = ""
-  for v in m.variables:
-    encodeValue(st.vals[v], result)
-
-proc decodeState*(m: Module; s: string): State =
-  result = State(vals: initTable[SymId, Value]())
-  var pos = 0
-  for v in m.variables:
-    result.vals[v] = decodeValue(m.vs, s, pos)
-
-proc internState(ins: var seq[Interner]; enc: string): string =
-  ## Split an encoded state into per-variable segments, intern each and
-  ## return the packed index tuple (4 bytes LE per variable).
-  result = newStringOfCap(4 * ins.len)
-  var pos = 0
-  for i in 0 ..< ins.len:
-    let start = pos
-    skipEncodedValue(enc, pos)
-    let seg = enc[start .. pos - 1]
-    var id: int32
-    ins[i].idx.withValue(seg, hit):
-      id = hit[]
-    do:
-      id = int32(ins[i].encs.len)
-      ins[i].encs.add seg
-      ins[i].idx[seg] = id
-    let u = uint32(id)
-    result.add char(u and 0xff)
-    result.add char((u shr 8) and 0xff)
-    result.add char((u shr 16) and 0xff)
-    result.add char((u shr 24) and 0xff)
-
-proc unpackState(ins: seq[Interner]; key: string): string =
-  ## Packed index tuple → concatenated encoded state bytes.
-  result = ""
-  for i in 0 ..< ins.len:
-    let p = 4 * i
-    let id = uint32(key[p]) or (uint32(key[p+1]) shl 8) or
-             (uint32(key[p+2]) shl 16) or (uint32(key[p+3]) shl 24)
-    result.add ins[i].encs[int id]
 
 proc expandChunk(cm: CompiledModule; perms: seq[Table[SymId, SymId]];
                  useSym: bool; chunk: ptr Chunk) =

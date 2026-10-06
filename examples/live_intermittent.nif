@@ -1,0 +1,12 @@
+(stmts
+  (variables :pc.0.)
+  (def :Init.0. (prime pc.0. 0))
+  (def :Toggle.0. (and (lt pc.0. 2) (prime pc.0. (minus 1 pc.0.))))
+  (def :Progress.0. (and (eq pc.0. 1) (prime pc.0. 2)))
+  (def :Next.0. (or Toggle.0. Progress.0.))
+  (def :Inv.0. (in pc.0. (range 0 2)))
+  (def :Goal.0. (eq pc.0. 2))
+  (def :FairToggle.0. Toggle.0.)
+  (def :FairProgress.0. Progress.0.)
+  (spec (always-stutter Init.0. Next.0. (tuple pc.0.)))
+  (check Inv.0.))

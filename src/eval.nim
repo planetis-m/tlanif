@@ -594,25 +594,32 @@ proc evalExpr*(m: Module; c: var Cursor; f: Frame): Value =
 
 # ── Actions ──────────────────────────────────────────────────────────────
 
-proc containsPrime*(m: Module; c: Cursor): bool =
-  ## Does the subtree at `c` (following def references) contain a
-  ## `prime`/`unchanged`? Such a subtree is an *action*; a prime-free one is a
-  ## pure state predicate and must be evaluated with boolean short-circuiting.
+proc containsPrime(m: Module; c: Cursor; visiting: var HashSet[SymId]): bool =
   case c.kind
   of Symbol:
     if c.symId in m.defs:
-      result = containsPrime(m, m.defs[c.symId].body)
+      if c.symId in visiting:
+        raiseEval("recursive def in action: " & m.pool.poolSym(c.symId))
+      visiting.incl c.symId
+      result = containsPrime(m, m.defs[c.symId].body, visiting)
+      visiting.excl c.symId
     else:
       result = false
   of TagLit:
     if c.isTag(TPrime) or c.isTag(TUnchanged): return true
     var s = sub(c)
     while s.hasMore:
-      if containsPrime(m, s): return true
+      if containsPrime(m, s, visiting): return true
       s.skip
     result = false
   else:
     result = false
+
+proc containsPrime*(m: Module; c: Cursor): bool =
+  ## Follow def references, rejecting cycles instead of overflowing the stack.
+  ## A prime-free disjunction is a short-circuiting state predicate.
+  var visiting = initHashSet[SymId]()
+  containsPrime(m, c, visiting)
 
 proc evalAction*(m: Module; c: var Cursor; f: Frame): seq[Frame] =
   case c.kind

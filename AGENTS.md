@@ -1,10 +1,11 @@
 # AGENTS.md
 
-`tlanif` is a small explicit-state safety model checker for TLA-style specs written in a
+`tlanif` is a small explicit-state safety and bounded liveness model checker for TLA-style specs written in a
 NIF dialect (Nim's NIF s-expression format, from the Nimony project). It parses a spec,
 BFSes a finite state space and checks a safety invariant, printing a shortest
-counterexample when one exists. There are no tests, no CI, no nimble file: the examples
-are the test suite and the repo is developed as a single-shot tool.
+counterexample when one exists. Opt-in liveness checks named progress predicates under
+weak fairness. Examples and `tests/tliveness.nim` provide regression coverage; there is
+no CI or nimble file, and the repo is developed as a single-shot tool.
 
 ## Build, run, verify
 
@@ -21,7 +22,7 @@ nim c -d:release -o:bin/tlanif src/tlanif.nim
   makes the interpreters several times slower. Note the `examples/atomicarc*.nif` specs
   *model* Nim's `--mm:atomicArc`; tlanif itself is not built with it.
 
-Run / verify (exit code 0 = ok, 2 = check failed, 1 = error; violations and limit hits go
+Run / verify safety (exit code 0 = ok, 2 = check failed, 1 = error; violations and limit hits go
 to stderr with the counterexample):
 
 ```sh
@@ -33,16 +34,34 @@ to stderr with the counterexample):
 ./bin/tlanif --jobs:4 examples/atomicarc.nif # parallel BFS; must agree with the above
 ```
 
+After building the CLI, run native regression assertions from the repo root:
+
+```sh
+nim c -d:release -o:bin/tliveness -r tests/tliveness.nim
+```
+
+The suite compares compiled/reference liveness, checks 120 generated models against
+an independent closed-walk oracle, validates witnesses, exercises deep and bounded
+stress graphs, and compares all passing/failing safety examples with four workers.
+`tests/config.nims` supplies the source and NIF library paths. Debug and danger builds
+are also supported; use separate `--nimcache` directories for concurrent builds.
+
 CLI (the value-taking options are prefix-matched `--flag:value`; `--sym` and `-h`/`--help` match
 exactly; unknown options exit 1):
 
-* `--max-states:N` (default 100000) — exceeding it is reported like a violation
-  (`state limit exceeded (N)`, empty counterexample, exit 2).
+* `--max-states:N` (default 100000) — safety-only exhaustion remains exit 2;
+  liveness exhaustion is incomplete/unknown, exit 4, with no pass conclusion.
 * `--jobs:N` (0 = all cores) — selects `pexplore` (compiled, parallel). **Omitting the flag
   is the sequential reference explorer; `--jobs:0` is auto-parallel, not sequential.**
 * `--sym` — symmetry reduction over the model groups declared by `(models ...)`.
 * `--memo-limit:N` — per-module def-memo entry cap (0 = unbounded, default cap 1e6; the
   table is flushed when full, not evicted per entry).
+* `--live:GoalA,GoalB` — explicitly select `[]<>Goal` state predicates; safety is still checked.
+* `--fair:ActionA,ActionB` — selected weak-fairness groups, requiring `--live`.
+* `--live-eval:compiled|reference` — maintainer differential route; default compiled.
+  Liveness is single-worker and rejects both `--jobs` and `--sym`. Exit codes:
+  0 bounded pass, 1 invalid/error, 2 safety failure, 3 liveness failure,
+  4 incomplete, 5 no admissible fair behavior. Empty Init also produces 5.
 * `-h`/`--help` — prints the usage block and exits 0.
 
 Debugging defines:
@@ -59,8 +78,10 @@ Debugging defines:
 | `src/eval.nim` | `Module`/`Frame`/`DefInfo`, `EvalError`, expression interpreter, action interpreter, def memoization, `initialStates`/`successors`/`checkInvariant` |
 | `src/loader.nim` | top-level form loading: `constants`, `variables`, `models`, `assign`, `def`, `spec`, `check` (`extends` is parsed then skipped) |
 | `src/explore.nim` | sequential BFS, symmetry canonicalization, counterexample formatting |
-| `src/pexplore.nim` | parallel level-synchronous BFS: worker pool, state interning, byte-string state handoff |
-| `src/compile.nim` | def-to-closure compiler used by the parallel explorer for `check` and `Next` |
+| `src/pexplore.nim` | parallel level-synchronous safety BFS: worker pool and byte-string state handoff |
+| `src/statecodec.nim` | shared state encoding/decoding and exact per-variable interning |
+| `src/compile.nim` | def-to-closure compiler for `check`, `Next`, selected goals and fairness actions |
+| `src/liveness.nim` | full reachable graph, iterative SCC analysis, fair closed walks and reference witness validation |
 | `src/tlanif.nim` | CLI, exit codes, stderr diagnostics |
 
 Load path: `loadTlaFile` (`parseFromFile` with a fresh `TlaTag` pool) → `loadModule` builds one
@@ -76,6 +97,8 @@ Two evaluators over the same dialect:
   inlined at their call sites, flat `slots` vector, CPS actions, per-site cross-state def
   caches). The **parallel** explorer uses it in workers. `Init` is still interpreted via
   `evalAction`, and `getDefInfo`/`collectFree` come from `eval.nim`.
+  Liveness uses the same compiler with additional goals/actions; its reference mode
+  interprets all evaluations, while compiling once to reject unsupported selections.
 * The two must stay in sync: they currently handle exactly the same tag set, and
   `--jobs` vs no flag is the standing differential test (same explored-state counts and
   identical counterexamples). When adding a tag, update `TlaTag`, both evaluators, and be
@@ -85,8 +108,17 @@ Two evaluators over the same dialect:
 BFS: `explore` enqueues `initialStates`, checks the invariant per state, expands
 `successors`; `visited: Table[State, int]` plus a parent chain reconstruct the shortest
 counterexample. In parallel, the main thread only sees byte-encoded states: per-variable
-values are interned into packed 4-byte index tuples (`pexplore.Interner`) and the frontier
+values are interned into packed 4-byte index tuples (`statecodec.Interner`) and the frontier
 is streamed to workers in windows of `jobs * 8192` states.
+
+Liveness uses CSR edges, packed state keys, and 64-bit goal/fairness masks (maximum 64
+selections each). Retain overlapping memberships on deduplicated edges. Enabledness
+is determined in the full action semantics before restricting to goal-false states.
+Every state has an implicit stutter edge; no-op actions are not enabled nonstuttering
+actions. A fair SCC provides a disabling state or internal action edge for each group.
+Construct a walk covering those witnesses, rather than returning any simple cycle.
+Only its BFS prefix is shortest. Report no-fair-continuation states and vacuous goals;
+never advertise progress assurance when no admissible fair behavior exists.
 
 ## Spec language (things the examples don't make obvious)
 
@@ -137,11 +169,13 @@ enum but implemented nowhere; it raises `cannot evaluate tag as expression: TCas
 
 Actions: `Init` must prime every variable (`Init did not assign <var>` otherwise). In `Next`,
 any variable a branch leaves unprimed **stutters implicitly**; the `(tuple ...)` list is
-parsed into `stutterVars` but is currently unused.
+parsed into `stutterVars`. Safety exploration ignores that list; liveness requires a
+complete, duplicate-free tuple listing every variable.
 
 Defs are inlined/expanded, so the def graph must be acyclic: a cycle reachable from
-`Next`/`check` recurses until Nim's call-depth limit (`call depth limit reached in a debug
-build`). Only `or` whose subtree is prime-free is evaluated as a short-circuiting boolean
+`Next`/`check` is invalid. Compilation and `containsPrime` detect cycles on their
+traversal paths; other reference expansion can still hit the call-depth limit. Only
+`or` whose subtree is prime-free is evaluated as a short-circuiting boolean
 guard; other disjunctions in actions enumerate branches.
 
 ## Correctness-relevant internals
@@ -161,7 +195,8 @@ guard; other disjunctions in actions enumerate branches.
   `explore`/`pexplore` only enable it when the product has more than one element and print
   the count to stderr.
 * `initialStates`/`successors` live in `eval.nim` and are shared by both explorers; the
-  parallel path compiles only the invariant and Next.
+  parallel safety path compiles only the invariant and Next. Liveness also compiles
+  selected predicates/actions and always reference-validates emitted fair witnesses.
 
 ## Conventions and housekeeping
 

@@ -1,0 +1,12 @@
+(stmts
+  (variables :x.0. :y.0. :z.0.)
+  (def :Init.0. (and (prime x.0. 0) (prime y.0. 0) (prime z.0. 0)))
+  (def :X.0. (prime x.0. (if (eq x.0. 49) 0 (plus x.0. 1))))
+  (def :Y.0. (prime y.0. (if (eq y.0. 49) 0 (plus y.0. 1))))
+  (def :Z.0. (prime z.0. (if (eq z.0. 39) 0 (plus z.0. 1))))
+  (def :Next.0. (or X.0. Y.0. Z.0.))
+  (def :Inv.0. (and (ge x.0. 0) (lt x.0. 50) (ge y.0. 0) (lt y.0. 50)
+    (ge z.0. 0) (lt z.0. 40)))
+  (def :Goal.0. (eq x.0. 0))
+  (spec (always-stutter Init.0. Next.0. (tuple x.0. y.0. z.0.)))
+  (check Inv.0.))

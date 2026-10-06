@@ -1,0 +1,13 @@
+(stmts
+  (variables :pc.0.)
+  (def :Init.0. (prime pc.0. 0))
+  (def :A.0. (and (lt pc.0. 3) (prime pc.0. (if (eq pc.0. 0) 1 3))))
+  (def :B.0. (and (lt pc.0. 3) (prime pc.0. (if (eq pc.0. 0) 2 3))))
+  (def :Return.0. (and (in pc.0. (set 1 2)) (prime pc.0. 0)))
+  (def :Next.0. (or A.0. B.0. Return.0.))
+  (def :Inv.0. (in pc.0. (range 0 3)))
+  (def :Goal.0. (eq pc.0. 3))
+  (def :FairA.0. A.0.)
+  (def :FairB.0. B.0.)
+  (spec (always-stutter Init.0. Next.0. (tuple pc.0.)))
+  (check Inv.0.))

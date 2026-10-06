@@ -1,0 +1,9 @@
+(stmts
+  (variables :pc.0.)
+  (def :Init.0. (prime pc.0. 0))
+  (def :Next.0. (false))
+  (def :Outside.0. (prime pc.0. 1))
+  (def :Inv.0. (true))
+  (def :Goal.0. (true))
+  (spec (always-stutter Init.0. Next.0. (tuple pc.0.)))
+  (check Inv.0.))

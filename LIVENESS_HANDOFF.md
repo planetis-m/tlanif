@@ -1,4 +1,134 @@
-# Implement native bounded liveness in Tlanif
+# Native bounded liveness handoff
+
+The implementation is complete; the original brief is retained below.
+The validation record documents the native checker and its regression models.
+
+## Validation record
+
+Validated on 2026-10-06 with Nim 2.3.1, ORC, threads enabled, and the existing
+system NIF libraries. No new dependency or external liveness backend was added.
+
+Normal usage is `--live:GoalA,GoalB`, optional `--fair:ActionA,ActionB`, and
+`--max-states:N`. The compiled single-worker mode is the default.
+`--live-eval:reference` is a maintainer differential route. Existing safety
+commands retain their behavior; liveness rejects `--jobs` and `--sym`.
+
+Build and assertion commands, all successful (expected and observed exit 0):
+
+```sh
+nim c -d:release -o:bin/tlanif src/tlanif.nim
+nim c -d:release --nimcache:/tmp/tlanif-live-release -o:bin/tliveness -r tests/tliveness.nim
+nim c --nimcache:/tmp/tlanif-live-debug -o:bin/tliveness-debug -r tests/tliveness.nim
+nim c -d:danger --nimcache:/tmp/tlanif-live-danger -o:bin/tliveness-danger -r tests/tliveness.nim
+```
+
+The suite compares complete results, state/edge counts and formatted witnesses
+between compiled and reference liveness. It also compares 120 deterministic
+three-state/two-group models against an independent search over
+`(state, fulfilled fairness mask)` for nonempty closed walks, rather than using
+SCC acceptance. Every emitted witness is independently re-evaluated with
+`eval.nim`; deliberately corrupted transitions, stutter witnesses and unfair
+simple cycles are rejected.
+
+Reproduction commands and native assertion results (expected = observed):
+append `--live-eval:reference` to reproduce the second evaluator.
+Edges are unique source/target pairs, including one implicit stutter per state.
+
+| Command | Result / exit | States / edges |
+|---|---|---:|
+| `bin/tlanif --live:Goal examples/live_progress.nif` | liveness failure / 3 | 2 / 3 |
+| `bin/tlanif --live:Goal --fair:FairProgress examples/live_progress.nif` | pass / 0 | 2 / 3 |
+| `bin/tlanif --live:Goal examples/live_deadlock.nif` | stuttering failure / 3 | 1 / 1 |
+| `bin/tlanif --live:Goal --fair:FairToggle,FairProgress examples/live_intermittent.nif` | starvation permitted by weak fairness / 3 | 3 / 6 |
+| `bin/tlanif --live:Goal --fair:FairA,FairB examples/live_fair_walk.nif` | fair-walk failure / 3 | 4 / 10 |
+| `bin/tlanif --live:Goal --fair:FairWorker examples/live_pending_worker.nif` | permanently pending work / 3 | 2 / 4 |
+| `bin/tlanif --live:Goal --fair:Group,Overlap examples/live_groups.nif` | overlapping memberships retained / 3 | 3 / 7 |
+| `bin/tlanif --live:Goal --fair:A,B examples/live_groups.nif` | pass / 0 | 3 / 7 |
+| `bin/tlanif --live:Goal --fair:Noop examples/live_groups.nif` | no-op fairness cannot force progress / 3 | 3 / 7 |
+| `bin/tlanif --live:Vacuous examples/live_groups.nif` | vacuous / 0 | 3 / 7 |
+| `bin/tlanif --live:Goal,Vacuous,Never --fair:B examples/live_groups.nif` | pass, vacuous, failure / 3 | 3 / 7 |
+| `bin/tlanif --live:Goal --fair:Outside examples/live_no_fair.nif` | no fair behavior; no progress assurance / 5 | 1 / 1 |
+| `bin/tlanif --live:Goal --fair:FairProgress --max-states:1 examples/live_progress.nif` | incomplete / 4 | 1 / 1 retained |
+| `bin/tlanif --live:Goal --fair:Step examples/live_deep.nif` | pass / 0 | 50001 / 100001 |
+| `bin/tlanif --live:Goal --fair:X,Y,Z examples/live_stress.nif` | pass at the exact default cap / 0 | 100000 / 400000 |
+
+The fair-walk example emits prefix `0,2` and repeating walk
+`2,0,1,0,2`: both A and B occur on every repetition. Each individual simple
+cycle would miss an assumption. The intermittent example admits a repeated
+Toggle walk that disables Progress repeatedly, distinguishing weak from strong
+fairness. The progress example confirms that an escape to a goal-true state
+remains enabled when analyzing a goal-false singleton.
+
+Further native assertions cover multiple initial states, empty Init, states
+without fair continuation alongside admissible states, arbitrary let/if/exists
+action expressions, duplicate edges, exact cap boundaries, safety failures
+during liveness, invalid selections and aliases, recursive/unsupported
+definitions, missing/duplicate stutter variables, and the 64-group boundary.
+CLI assertions check incompatible options and exit codes 0 through 5;
+safety-only cap exhaustion remains exit 2. No CLI-output parser is used.
+
+Safety agreement uses `explore(loadModuleFile(path))` against
+`pexplore(path, jobs = 4)`, including identical diagnostics/counterexamples:
+
+| Example | Expected = observed | States checked before completion/failure |
+|---|---|---:|
+| mutex | pass | 3 |
+| mutex_bug | invariant failure | 4 |
+| atomicarc | pass | 40 |
+| atomicarc_bug | invariant failure | 33 |
+| atomicarc_cursor | invariant failure | 43 |
+
+Benchmarks used the release CLI, with each invocation measured sequentially:
+
+```sh
+for mode in compiled reference; do
+  for sample in progress fair_walk deep stress; do
+    case "$sample" in
+      progress) groups=FairProgress ;;
+      fair_walk) groups=FairA,FairB ;;
+      deep) groups=Step ;;
+      stress) groups=X,Y,Z ;;
+    esac
+    /usr/bin/time -f "$sample $mode elapsed=%e s peak_rss=%M KiB exit=%x" \
+      ./bin/tlanif --live:Goal --fair:"$groups" --live-eval:"$mode" "examples/live_$sample.nif"
+  done
+done
+/usr/bin/time -f 'suite elapsed=%e s peak_rss=%M KiB exit=%x' ./bin/tliveness
+```
+
+| Model | Compiled elapsed / peak RSS | Reference elapsed / peak RSS |
+|---|---:|---:|
+| progress | 0.00 s / 2968 KiB | 0.00 s / 2924 KiB |
+| fair_walk | 0.00 s / 3264 KiB | 0.00 s / 3180 KiB |
+| deep | 0.07 s / 44408 KiB | 0.37 s / 46896 KiB |
+| stress | 0.28 s / 48160 KiB | 1.33 s / 63152 KiB |
+
+The full release assertion suite, including both evaluators, the independent
+oracle, deep/stress cases, four-worker safety checks and CLI subprocesses,
+completed in **2.12 s**, **108484 KiB** peak RSS (approximately **106 MiB**),
+exit 0. These are single local measurements with elapsed time rounded to
+hundredths; they exclude compilation and are not performance guarantees.
+
+Acceptance argument: in the reachable goal-false subgraph, an SCC admits a fair
+infinite walk if each selected group has either a disabling state or an internal
+nonstuttering action edge. Strong connectivity joins those witnesses into one
+closed walk; repetition either disables each group infinitely often or takes
+it infinitely often. Conversely, a finite graph's fair infinite behavior must
+supply those witnesses among its recurring states and edges. Enabledness is
+computed in the full action semantics before restriction, overlapping edge
+labels are ORed, and stuttering makes singleton SCCs candidates. SCC traversal
+is iterative. Only the BFS prefix to the chosen loop entry is shortest.
+
+Remaining limits: finite `[]<>Goal` only, weak fairness only, single-worker
+liveness, no symmetry reduction, at most 64 selected goals and groups, and a
+complete stutter tuple. Selected actions use the existing omitted-variable
+stuttering semantics, and their enabledness includes successors outside Next.
+No fair behavior (including empty Init) is distinct from a bounded pass.
+Only the last `check` form takes effect. Definitions must be acyclic; compilation
+and prime detection reject cycles on their traversal paths. This feature makes
+no claims about unbounded workloads or external production systems.
+
+## Original implementation brief
 
 Start in `~/Projects/tlanif`, on branch `feature/native-liveness`. Implement,
 validate and locally commit the work. **Do not push.** The checkout contains

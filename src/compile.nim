@@ -55,6 +55,8 @@ type
     nvars*: int
     inv: CExpr
     nextRun: Cont
+    goals: seq[CExpr]
+    fairActions: seq[Cont]
     numSlots: int
     inlining: HashSet[SymId]
     interns: seq[VarIntern]
@@ -780,7 +782,9 @@ proc compileAction(cm: CompiledModule; c: var Cursor; sc: Scope;
 
 # ── Module compilation and drivers ───────────────────────────────────────
 
-proc compileModule*(m: Module): CompiledModule =
+proc compileModule*(m: Module; goals: seq[Cursor] = @[];
+                    fairActions: seq[Cursor] = @[]): CompiledModule =
+  ## Additional state predicates/actions share slots and one loaded state.
   let cm = CompiledModule(
     m: m,
     ctx: Ctx(atStack: @[]),
@@ -827,6 +831,13 @@ proc compileModule*(m: Module): CompiledModule =
   var nextBody = m.nextBody
   cm.nextRun = compileAction(cm, nextBody, sc, emitK)
 
+  for goal in goals:
+    var body = goal
+    cm.goals.add compileExpr(cm, body, sc)
+  for action in fairActions:
+    var body = action
+    cm.fairActions.add compileAction(cm, body, sc, emitK)
+
   ctx.slots.setLen cm.numSlots
   ctx.primed.setLen cm.nvars
   ctx.primedSet.setLen cm.nvars
@@ -872,6 +883,17 @@ var invCalls* {.threadvar.}: int
 proc checkInv*(cm: CompiledModule): bool =
   inc invCalls
   guardBool(cm.inv())
+
+proc checkGoal*(cm: CompiledModule; index: int): bool =
+  guardBool(cm.goals[index]())
+
+proc runFairAction*(cm: CompiledModule; index: int; emit: proc()) =
+  ## Same enumeration and omitted-variable stuttering as runNext.
+  cm.ctx.emit = emit
+  try:
+    cm.fairActions[index]()
+  finally:
+    cm.ctx.emit = nil
 
 proc runNext*(cm: CompiledModule; emit: proc()) =
   ## Enumerate all Next branches for the loaded state; `emit` fires once

@@ -1,0 +1,8 @@
+(stmts
+  (variables :pending.0.)
+  (def :Init.0. (prime pending.0. (true)))
+  (def :Next.0. (false))
+  (def :Inv.0. (true))
+  (def :Goal.0. (not pending.0.))
+  (spec (always-stutter Init.0. Next.0. (tuple pending.0.)))
+  (check Inv.0.))
